@@ -211,15 +211,21 @@ def get_active_model():
 # ==================== Monster Generation ====================
 
 # 공통 스타일 프롬프트 (단순하고 귀여운 스티커 스타일, 흰색 배경)
-COMMON_STYLE = "simple flat vector cute sticker art, thick bold dark outlines, minimalist, white background, isolated, 2d style"
+COMMON_STYLE = """cute 2D cartoon cat character illustration,
+flat vector style, pastel colors,
+full body view of a single anthropomorphic cat character,
+round body with big head and small body,
+short arms and legs,
+simple facial expression with dot eyes and small mouth, cheerful and friendly mood, character fully visible and centered,
+various cute poses, solid color background, minimal details, no shading, no close-up, no cropped body, no zoom"""
 
 # 한글 프롬프트 템플릿 (분리수거 카테고리별)
 MONSTER_PROMPTS = {
-    "플라스틱": f"cute adorable plastic bottle monster character, {COMMON_STYLE}, yellow and bright colors",
-    "종이": f"cute adorable cardboard box monster character, {COMMON_STYLE}, blue and soft colors",
-    "유리": f"cute adorable glass bottle monster character, {COMMON_STYLE}, green and transparent colors",
-    "캔": f"cute adorable metal can monster character, {COMMON_STYLE}, red and metallic colors",
-    "일반쓰레기": f"cute adorable trash bag monster character, {COMMON_STYLE}, gray and dark colors"
+    "플라스틱": f"{COMMON_STYLE}",
+    "종이": f"{COMMON_STYLE}",
+    "유리": f"{COMMON_STYLE}",
+    "캔": f"{COMMON_STYLE}",
+    "일반쓰레기": f"{COMMON_STYLE}"
 }
 
 class MonsterGenerator:
