@@ -295,36 +295,88 @@ class MonsterGenerator:
                 # YOLO 추론
                 result = classifier.predict(image_bytes, threshold=0.3)
                 
-                if result and result.get('mask'):
-                    import cv2
-                    import numpy as np
+                # YOLO 결과에서 직접 픽셀 단위 마스크 추출하여 자유로운 형태로 객체 분리
+                import cv2
+                import numpy as np
+                
+                # YOLO 추론 결과에서 직접 마스크 데이터 접근
+                results = classifier.active_model(input_image, conf=0.3, verbose=False)
+                
+                if results and len(results) > 0 and results[0].masks is not None and len(results[0].masks) > 0:
+                    yolo_result = results[0]
                     
-                    # 마스크 폴리곤 가져오기 (정규화된 좌표)
-                    polygon = result['mask'] # [[x,y], [x,y], ...]
+                    # 가장 높은 신뢰도를 가진 객체의 인덱스 찾기
+                    confidences = yolo_result.boxes.conf.cpu().numpy()
+                    best_idx = np.argmax(confidences)
                     
-                    if polygon:
-                        w, h = input_image.size
+                    # 픽셀 단위 마스크 데이터 직접 가져오기
+                    # mask.data: 원본 이미지 크기의 부동소수점 마스크 (0~1 사이값)
+                    mask_data = yolo_result.masks.data[best_idx].cpu().numpy()
+                    
+                    # 마스크를 원본 이미지 크기로 리사이즈
+                    w, h = input_image.size
+                    mask_resized = cv2.resize(mask_data, (w, h), interpolation=cv2.INTER_LINEAR)
+                    
+                    # 부동소수점 마스크를 바이너리로 변환 (0.5 기준)
+                    # 자연스러운 경계를 위해 가우시안 블러 적용
+                    mask_smoothed = cv2.GaussianBlur(mask_resized, (5, 5), 0)
+                    
+                    # 0~255 범위의 uint8 마스크로 변환
+                    mask_uint8 = (mask_smoothed * 255).astype(np.uint8)
+                    
+                    # ===== 객체를 이미지 중앙으로 이동 =====
+                    # 바이너리 마스크 생성 (객체 영역 찾기용)
+                    binary_mask = (mask_uint8 > 127).astype(np.uint8) * 255
+                    
+                    # 객체의 바운딩 박스 계산
+                    coords = cv2.findNonZero(binary_mask)
+                    if coords is not None:
+                        x_obj, y_obj, w_obj, h_obj = cv2.boundingRect(coords)
                         
-                        # 폴리곤을 픽셀 좌표로 변환
-                        pixel_polygon = np.array([[int(p[0] * w), int(p[1] * h)] for p in polygon], dtype=np.int32)
+                        # 객체 중심 계산
+                        obj_center_x = x_obj + w_obj // 2
+                        obj_center_y = y_obj + h_obj // 2
                         
-                        # 마스크 이미지 생성 (검은 배경)
-                        mask_img = np.zeros((h, w), dtype=np.uint8)
-                        # 폴리곤 영역을 흰색으로 채움
-                        cv2.fillPoly(mask_img, [pixel_polygon], 255)
+                        # 이미지 중심 계산
+                        img_center_x = w // 2
+                        img_center_y = h // 2
+                        
+                        # 이동량 계산
+                        shift_x = img_center_x - obj_center_x
+                        shift_y = img_center_y - obj_center_y
+                        
+                        # 변환 행렬 생성 (이동)
+                        translation_matrix = np.float32([[1, 0, shift_x], [0, 1, shift_y]])
+                        
+                        # 원본 이미지를 numpy로 변환
+                        img_np = np.array(input_image)
+                        
+                        # 이미지와 마스크를 중앙으로 이동
+                        img_shifted = cv2.warpAffine(img_np, translation_matrix, (w, h), 
+                                                      borderMode=cv2.BORDER_CONSTANT, 
+                                                      borderValue=(255, 255, 255))  # 흰색 배경
+                        mask_shifted = cv2.warpAffine(mask_uint8, translation_matrix, (w, h),
+                                                       borderMode=cv2.BORDER_CONSTANT,
+                                                       borderValue=0)  # 마스크는 0으로 채움
                         
                         # PIL 이미지로 변환
-                        mask_pil = Image.fromarray(mask_img)
+                        input_centered = Image.fromarray(img_shifted)
+                        mask_pil = Image.fromarray(mask_shifted, mode='L')
                         
-                        # 흰색 배경 이미지 생성
-                        white_bg = Image.new("RGB", (w, h), (255, 255, 255))
-                        
-                        # 마스크를 사용하여 원본 이미지와 흰색 배경 합성
-                        # 마스크가 흰색인 부분(객체)은 원본, 검은색(배경)은 흰색 배경
-                        processed_input = Image.composite(input_image, white_bg, mask_pil)
-                        print("Object isolated successfully using YOLO mask.")
+                        print(f"Object moved to center: shift_x={shift_x}, shift_y={shift_y}")
                     else:
-                        print("No mask polygon found.")
+                        # 객체를 찾지 못한 경우 원본 사용
+                        input_centered = input_image
+                        mask_pil = Image.fromarray(mask_uint8, mode='L')
+                        print("Could not find object bounds, using original position.")
+                    
+                    # 흰색 배경 이미지 생성
+                    white_bg = Image.new("RGB", (w, h), (255, 255, 255))
+                    
+                    # 마스크를 사용하여 중앙 이동된 이미지와 흰색 배경 합성
+                    # 마스크 값에 따라 부드러운 경계로 합성됨 (자유로운 형태)
+                    processed_input = Image.composite(input_centered, white_bg, mask_pil)
+                    print("Object isolated and centered successfully using free-form pixel mask.")
                 else:
                     print("No object detected or no mask available.")
                     
