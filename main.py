@@ -1,5 +1,6 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
 from model import classify_image, generate_trash_monster
@@ -94,8 +95,14 @@ async def classify_endpoint(file: UploadFile = File(...)):
     이미지를 업로드하면 AI가 분류하고 분리수거 가이드를 제공합니다.
     """
     try:
-        contents = await file.read()
-        result = classify_image(contents)
+        # Read all images
+        images_bytes = []
+        for file in files:
+            contents = await file.read()
+            images_bytes.append(contents)
+        
+        # Perform multi-frame classification
+        result = classify_image_multiframe(images_bytes)
         
         # No detection
         if not result:
@@ -179,7 +186,7 @@ async def classify_endpoint(file: UploadFile = File(...)):
         }
         
     except Exception as e:
-        print(f"Error in classify: {e}")
+        print(f"Error in generate-monster: {e}")
         import traceback
         traceback.print_exc()
         
