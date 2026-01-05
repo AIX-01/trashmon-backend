@@ -1,8 +1,10 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Dict, Optional, List
-from model import classify_image, get_models, switch_model, get_active_model
+from typing import List, Optional
+from model import classify_image, generate_trash_monster
+import base64
+from io import BytesIO
 
 app = FastAPI(title="JUNKGAME API", version="4.0 - Multi-Model")
 
@@ -127,18 +129,68 @@ async def predict_endpoint(file: UploadFile = File(...)):
         
         label = result['label'].lower()
         score = result['score']
-        mask = result.get('mask', None)
-        model_name = result.get('model', get_active_model())
         
-        character_key = LABEL_MAP.get(label, "일반")
+        # Map English label to Korean category
+        category = LABEL_MAP.get(label, "일반쓰레기")
         
+        # Get recycling guide for this category
+        guide = RECYCLING_GUIDES.get(category, RECYCLING_GUIDES["일반쓰레기"])
+        
+        # Get box if available
+        box = result.get('box')
+        
+        # Generate monster image using SD-Turbo model
+        monster_name = f"{category} 몬스터"
+        monster_image = None
+        
+        try:
+            print(f"Generating monster image for category: {category}")
+            monster_image_pil = generate_trash_monster(contents, category)
+            
+            if monster_image_pil:
+                # Convert PIL Image to base64 data URI
+                buffered = BytesIO()
+                monster_image_pil.save(buffered, format="PNG")
+                img_str = base64.b64encode(buffered.getvalue()).decode()
+                monster_image = f"data:image/png;base64,{img_str}"
+                print("Monster image generated successfully!")
+            else:
+                print("Monster generation returned None, using fallback")
+                monster_image = None
+        except Exception as e:
+            print(f"Error generating monster: {e}")
+            monster_image = None
+        
+        # Fallback: create simple placeholder if generation failed
+        if not monster_image:
+            from PIL import Image, ImageDraw
+            
+            print("Using fallback placeholder monster image")
+            img = Image.new('RGBA', (200, 200), (255, 255, 255, 0))
+            draw = ImageDraw.Draw(img)
+            
+            category_color = guide.get('monster_color', '#78909C')
+            hex_color = category_color.lstrip('#')
+            rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+            
+            draw.ellipse([30, 30, 170, 170], fill=rgb + (255,))
+            draw.ellipse([70, 70, 90, 90], fill=(0, 0, 0, 255))
+            draw.ellipse([110, 70, 130, 90], fill=(0, 0, 0, 255))
+            draw.arc([60, 100, 140, 140], start=0, end=180, fill=(0, 0, 0, 255), width=3)
+            
+            buffered = BytesIO()
+            img.save(buffered, format="PNG")
+            img_str = base64.b64encode(buffered.getvalue()).decode()
+            monster_image = f"data:image/png;base64,{img_str}"
+
         return {
             "detected_label": label,
             "character_key": character_key,
             "confidence": score,
-            "message": f"{character_key} 감지됨",
-            "mask": mask,
-            "model": model_name
+            "monster_name": monster_name,
+            "monster_image": monster_image,
+            "guide": guide,
+            "box": box
         }
     except Exception as e:
         print(f"Error in predict: {e}")
@@ -146,61 +198,4 @@ async def predict_endpoint(file: UploadFile = File(...)):
         traceback.print_exc()
         return {"error": str(e)}
 
-@app.post("/classify")
-async def classify_and_collect_endpoint(file: UploadFile = File(...)):
-    """Gameplay endpoint with segmentation."""
-    try:
-        contents = await file.read()
-        result = classify_image(contents)
-        
-        if not result:
-            return {
-                "detected_label": None,
-                "message": "물체를 찾을 수 없습니다.",
-                "mask": None,
-                "model": get_active_model()
-            }
-        
-        label = result['label'].lower()
-        score = result['score']
-        mask = result.get('mask', None)
-        model_name = result.get('model', get_active_model())
-        character_key = LABEL_MAP.get(label, "일반")
-        
-        target_key = character_key
-        if target_key not in game_state:
-            # Auto-create new category if needed
-            game_state[target_key] = CharacterStats(level=1, xp=0, count=0)
-            
-        stats = game_state[target_key]
-        stats.count += 1
-        stats.xp += XP_PER_ITEM
-        
-        leveled_up = False
-        if stats.xp >= stats.level * XP_TO_LEVEL_UP:
-            stats.level += 1
-            stats.xp = 0 
-            leveled_up = True
-            
-        return {
-            "detected_label": label,
-            "character_key": target_key,
-            "confidence": score,
-            "leveled_up": leveled_up,
-            "new_stats": stats,
-            "message": f"{target_key} 획득!",
-            "mask": mask,
-            "model": model_name
-        }
-    except Exception as e:
-        print(f"Error in classify: {e}")
-        import traceback
-        traceback.print_exc()
-        return {"error": str(e)}
-    
-@app.post("/reset")
-def reset_game():
-    global game_state
-    for key in game_state:
-        game_state[key] = CharacterStats(level=1, xp=0, count=0)
-    return {"message": "Game reset successfully"}
+
