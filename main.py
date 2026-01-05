@@ -2,9 +2,10 @@ from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Dict, Optional, List
-import io
-from model import classify_image, classify_image_multiframe, generate_trash_monster
+from typing import List, Optional
+from model import classify_image, generate_trash_monster
+import base64
+from io import BytesIO
 
 app = FastAPI(title="Trashmon Classifier API", version="1.0")
 
@@ -94,69 +95,6 @@ async def classify_endpoint(file: UploadFile = File(...)):
     이미지를 업로드하면 AI가 분류하고 분리수거 가이드를 제공합니다.
     """
     try:
-        contents = await file.read()
-        result = classify_image(contents)
-        
-        # No detection
-        if not result:
-            return {
-                "success": False,
-                "category": "",
-                "confidence": 0.0,
-                "guide": {
-                    "bin_color": "",
-                    "message": "물체를 찾을 수 없습니다.",
-                    "tips": [],
-                    "monster_color": "#CCCCCC"
-                }
-            }
-        
-        # Get detected label and map to Korean category
-        label = result['label'].lower()
-        score = result['score']
-        
-        # Map English label to Korean category
-        category = LABEL_MAP.get(label, "일반쓰레기")
-        
-        # Get recycling guide for this category
-        guide = RECYCLING_GUIDES.get(category, RECYCLING_GUIDES["일반쓰레기"])
-        
-        # Get box if available
-        box = result.get('box')
-
-        return {
-            "success": True,
-            "category": category,
-            "confidence": score,
-            "guide": guide,
-            "box": box
-        }
-        
-    except Exception as e:
-        print(f"Error in classify: {e}")
-        import traceback
-        traceback.print_exc()
-        
-        return {
-            "success": False,
-            "category": "",
-            "confidence": 0.0,
-            "guide": {
-                "bin_color": "",
-                "message": f"오류가 발생했습니다: {str(e)}",
-                "tips": [],
-                "monster_color": "#CCCCCC"
-            },
-            "box": None
-        }
-
-@app.post("/classify-multi")
-async def classify_multiframe_endpoint(files: List[UploadFile] = File(...)):
-    """
-    다중 프레임 쓰레기 분류 엔드포인트
-    여러 이미지를 업로드하면 AI가 가장 신뢰도 높고 많이 식별된 물체를 선택합니다.
-    """
-    try:
         # Read all images
         images_bytes = []
         for file in files:
@@ -192,18 +130,63 @@ async def classify_multiframe_endpoint(files: List[UploadFile] = File(...)):
         
         # Get box if available
         box = result.get('box')
+        
+        # Generate monster image using SD-Turbo model
+        monster_name = f"{category} 몬스터"
+        monster_image = None
+        
+        try:
+            print(f"Generating monster image for category: {category}")
+            monster_image_pil = generate_trash_monster(contents, category)
+            
+            if monster_image_pil:
+                # Convert PIL Image to base64 data URI
+                buffered = BytesIO()
+                monster_image_pil.save(buffered, format="PNG")
+                img_str = base64.b64encode(buffered.getvalue()).decode()
+                monster_image = f"data:image/png;base64,{img_str}"
+                print("Monster image generated successfully!")
+            else:
+                print("Monster generation returned None, using fallback")
+                monster_image = None
+        except Exception as e:
+            print(f"Error generating monster: {e}")
+            monster_image = None
+        
+        # Fallback: create simple placeholder if generation failed
+        if not monster_image:
+            from PIL import Image, ImageDraw
+            
+            print("Using fallback placeholder monster image")
+            img = Image.new('RGBA', (200, 200), (255, 255, 255, 0))
+            draw = ImageDraw.Draw(img)
+            
+            category_color = guide.get('monster_color', '#78909C')
+            hex_color = category_color.lstrip('#')
+            rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+            
+            draw.ellipse([30, 30, 170, 170], fill=rgb + (255,))
+            draw.ellipse([70, 70, 90, 90], fill=(0, 0, 0, 255))
+            draw.ellipse([110, 70, 130, 90], fill=(0, 0, 0, 255))
+            draw.arc([60, 100, 140, 140], start=0, end=180, fill=(0, 0, 0, 255), width=3)
+            
+            buffered = BytesIO()
+            img.save(buffered, format="PNG")
+            img_str = base64.b64encode(buffered.getvalue()).decode()
+            monster_image = f"data:image/png;base64,{img_str}"
 
         return {
             "success": True,
             "category": category,
             "confidence": score,
+            "monster_name": monster_name,
+            "monster_image": monster_image,
             "guide": guide,
-            "frames_analyzed": len(images_bytes),
             "box": box
         }
         
     except Exception as e:
-        print(f"Error in classify-multi: {e}")
+        print(f"Error in generate-monster: {e}")
         import traceback
         traceback.print_exc()
         
@@ -216,49 +199,8 @@ async def classify_multiframe_endpoint(files: List[UploadFile] = File(...)):
                 "message": f"오류가 발생했습니다: {str(e)}",
                 "tips": [],
                 "monster_color": "#CCCCCC"
-            }
+            },
+            "box": None
         }
 
-@app.post("/generate-monster")
-async def generate_monster_endpoint(
-    file: UploadFile = File(...),
-    category: str = Form("일반쓰레기")
-):
-    """
-    쓰레기 이미지를 귀여운 괴물로 변환하는 엔드포인트
-    
-    Args:
-        file: 원본 쓰레기 이미지
-        category: 분리수거 카테고리 (플라스틱, 종이, 유리, 캔, 일반쓰레기)
-    
-    Returns:
-        변환된 괴물 이미지 (PNG)
-    """
-    try:
-        contents = await file.read()
-        
-        # 괴물 생성
-        monster_image = generate_trash_monster(contents, category)
-        
-        if not monster_image:
-            return {
-                "success": False,
-                "message": "괴물 생성에 실패했습니다. 모델이 아직 로드되지 않았을 수 있습니다."
-            }
-        
-        # 이미지를 bytes로 변환
-        img_bytes = io.BytesIO()
-        monster_image.save(img_bytes, format='PNG')
-        img_bytes.seek(0)
-        
-        return StreamingResponse(img_bytes, media_type="image/png")
-        
-    except Exception as e:
-        print(f"Error in generate-monster: {e}")
-        import traceback
-        traceback.print_exc()
-        
-        return {
-            "success": False,
-            "message": f"오류가 발생했습니다: {str(e)}"
-        }
+
