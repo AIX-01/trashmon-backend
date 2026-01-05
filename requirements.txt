@@ -5,3 +5,8 @@ ultralytics
 pillow
 opencv-python
 huggingface_hub
+diffusers
+transformers
+accelerate
+torch
+torchvision
