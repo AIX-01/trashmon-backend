@@ -1,0 +1,20 @@
+# Common
+README.md
+CHANGELOG.md
+docker-compose.yml
+Dockerfile
+
+# git
+.git
+.gitattributes
+.gitignore
+
+# JetBrains
+.idea
+
+## Dependency directories
+node_modules/
+
+# --- env (이미 CI/런타임에서 주입)
+.env
+.env.*

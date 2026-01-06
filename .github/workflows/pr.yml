@@ -1,0 +1,27 @@
+name: PR
+
+run-name: "[${{ github.head_ref }}] ${{ github.event.pull_request.title }} (#${{ github.event.pull_request.number }})"
+
+on:
+  pull_request:
+
+jobs:
+  Build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Lowercase Repository Name
+        run: echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: ghcr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
